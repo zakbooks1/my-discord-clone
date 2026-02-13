@@ -2,79 +2,104 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const mongoose = require("mongoose");
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const session = require('express-session');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// --- CONFIGURATION ---
-const ADMIN_PASSWORD = "1234"; // CHANGE THIS to your secret password
+// --- GOOGLE & SESSION CONFIG ---
+// Replace these with your codes from Google Cloud Console
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "1234";
+
+app.use(session({ 
+    secret: 'discord_clone_secret', 
+    resave: false, 
+    saveUninitialized: false 
+}));
+app.use(passport.initialize());
+app.use(passport.session());
 app.use(express.static("public"));
 
+// --- DATABASE ---
 const mongoURI = process.env.MONGO_URL;
 mongoose.connect(mongoURI).then(() => console.log("DB Connected")).catch(err => console.log(err));
 
-// --- SCHEMAS ---
 const Message = mongoose.model("Message", {
     user: String, text: String, color: String, time: String, room: String, role: String
 });
 
-const Role = mongoose.model("Role", {
-    name: String, color: String
+const Role = mongoose.model("Role", { name: String, color: String });
+
+// --- PASSPORT GOOGLE STRATEGY ---
+passport.use(new GoogleStrategy({
+    clientID: GOOGLE_CLIENT_ID,
+    clientSecret: GOOGLE_CLIENT_SECRET,
+    callbackURL: "/auth/google/callback"
+  },
+  (accessToken, refreshToken, profile, done) => {
+    // profile contains the Google User info (Name, Email, Photo)
+    return done(null, profile);
+  }
+));
+
+passport.serializeUser((user, done) => done(null, user));
+passport.deserializeUser((user, done) => done(null, user));
+
+// --- AUTH ROUTES ---
+// 1. Redirect to Google
+app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+
+// 2. Google sends user back here
+app.get('/auth/google/callback', 
+    passport.authenticate('google', { failureRedirect: '/' }),
+    (req, res) => {
+        // Success! Redirect to chat. The user info is now in req.user
+        res.redirect('/');
+    }
+);
+
+// 3. API to check if user is logged in
+app.get('/api/current_user', (req, res) => {
+    res.send(req.user);
 });
 
-// --- LOGIC ---
+// --- CHAT LOGIC ---
 io.on("connection", (socket) => {
     
-    // 1. SECURE LOGIN: Server decides the role
     socket.on("attempt login", (details) => {
         let assignedRole = "Member";
         let assignedColor = "#ffffff";
-
         if (details.password === ADMIN_PASSWORD) {
             assignedRole = "Admin";
-            assignedColor = "#ed4245"; // Admin Red
+            assignedColor = "#ed4245";
         }
-
-        // Send the "Official" session back to the user
-        socket.emit("login verified", { 
-            user: details.user, 
-            role: assignedRole, 
-            color: assignedColor 
-        });
+        socket.emit("login verified", { user: details.user, role: assignedRole, color: assignedColor });
     });
 
     socket.on("join room", async (room) => {
         socket.join(room);
-        const history = await Message.find({ room: room }).sort({ _id: 1 }).limit(50);
+        const history = await Message.find({ room }).sort({ _id: 1 }).limit(50);
         const roles = await Role.find();
         socket.emit("load history", history, roles);
-    });
-
-    // 2. MODERATION: Only let the server handle deletions
-    socket.on("delete message", async (msgId) => {
-        // Here, the server deletes it from MongoDB
-        await Message.findByIdAndDelete(msgId);
-        // Tell everyone to remove it from their screens
-        io.emit("message deleted", msgId);
-    });
-
-    socket.on("create role", async (roleData) => {
-        const newRole = new Role(roleData);
-        await newRole.save();
-        io.emit("role created", roleData);
     });
 
     socket.on("chat message", async (data) => {
         data.time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const newMessage = new Message(data);
         const savedMsg = await newMessage.save();
-        
-        // Include the MongoDB ID so we can delete it later
-        const msgToSend = { ...data, _id: savedMsg._id, time: data.time };
-        io.to(data.room).emit("chat message", msgToSend);
+        io.to(data.room).emit("chat message", { ...data, _id: savedMsg._id });
+    });
+
+    socket.on("delete message", async (id) => {
+        await Message.findByIdAndDelete(id);
+        io.emit("message deleted", id);
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server on ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on ${PORT}`));
