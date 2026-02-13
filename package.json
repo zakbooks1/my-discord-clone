@@ -1,0 +1,16 @@
+{
+  "name": "mini-discord",
+  "version": "1.0.0",
+  "main": "main.js", 
+  "scripts": {
+    "start": "node server.js",
+    "desktop": "electron .",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.zak.minidiscord",
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
