@@ -10,11 +10,13 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// --- GOOGLE & SESSION CONFIG ---
-// Replace these with your codes from Google Cloud Console
+// --- CONFIGURATION (Environment Variables) ---
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "1234";
+
+// This MUST match what you put in Google Cloud Console exactly
+const CALLBACK_URL = "https://my-discord-clone-1.onrender.com/auth/google/callback";
 
 app.use(session({ 
     secret: 'discord_clone_secret', 
@@ -27,7 +29,9 @@ app.use(express.static("public"));
 
 // --- DATABASE ---
 const mongoURI = process.env.MONGO_URL;
-mongoose.connect(mongoURI).then(() => console.log("DB Connected")).catch(err => console.log(err));
+mongoose.connect(mongoURI)
+    .then(() => console.log("MongoDB Connected"))
+    .catch(err => console.error("DB Error:", err));
 
 const Message = mongoose.model("Message", {
     user: String, text: String, color: String, time: String, room: String, role: String
@@ -39,10 +43,19 @@ const Role = mongoose.model("Role", { name: String, color: String });
 passport.use(new GoogleStrategy({
     clientID: GOOGLE_CLIENT_ID,
     clientSecret: GOOGLE_CLIENT_SECRET,
-    callbackURL: "/auth/google/callback"
+    callbackURL: CALLBACK_URL
   },
   (accessToken, refreshToken, profile, done) => {
-    // profile contains the Google User info (Name, Email, Photo)
+    // VIP List: Automatic Admin for your email
+    const myEmail = "zakbooks1@gmail.com"; // Ensure this is your email
+    
+    if (profile.emails && profile.emails[0].value === myEmail) {
+        profile.role = "Admin";
+        profile.color = "#ed4245"; 
+    } else {
+        profile.role = "Member";
+        profile.color = "#5865f2";
+    }
     return done(null, profile);
   }
 ));
@@ -50,42 +63,32 @@ passport.use(new GoogleStrategy({
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user, done) => done(null, user));
 
-// --- AUTH ROUTES ---
-// 1. Redirect to Google
+// --- ROUTES ---
 app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
-// 2. Google sends user back here
 app.get('/auth/google/callback', 
     passport.authenticate('google', { failureRedirect: '/' }),
-    (req, res) => {
-        // Success! Redirect to chat. The user info is now in req.user
-        res.redirect('/');
-    }
+    (req, res) => res.redirect('/')
 );
 
-// 3. API to check if user is logged in
 app.get('/api/current_user', (req, res) => {
-    res.send(req.user);
+    res.send(req.user || {});
 });
 
-// --- CHAT LOGIC ---
+// --- SOCKET LOGIC ---
 io.on("connection", (socket) => {
-    
     socket.on("attempt login", (details) => {
-        let assignedRole = "Member";
-        let assignedColor = "#ffffff";
+        let role = "Member", color = "#ffffff";
         if (details.password === ADMIN_PASSWORD) {
-            assignedRole = "Admin";
-            assignedColor = "#ed4245";
+            role = "Admin"; color = "#ed4245";
         }
-        socket.emit("login verified", { user: details.user, role: assignedRole, color: assignedColor });
+        socket.emit("login verified", { user: details.user, role: role, color: color });
     });
 
     socket.on("join room", async (room) => {
         socket.join(room);
         const history = await Message.find({ room }).sort({ _id: 1 }).limit(50);
-        const roles = await Role.find();
-        socket.emit("load history", history, roles);
+        socket.emit("load history", history);
     });
 
     socket.on("chat message", async (data) => {
@@ -102,4 +105,4 @@ io.on("connection", (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
