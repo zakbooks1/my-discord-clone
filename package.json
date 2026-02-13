@@ -1,7 +1,7 @@
 {
   "name": "mini-discord",
   "version": "1.0.0",
-  "main": "main.js", 
+  "main": "main.js",
   "scripts": {
     "start": "node server.js",
     "desktop": "electron .",
@@ -12,5 +12,13 @@
     "win": {
       "target": "nsis"
     }
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "mongoose": "^9.2.1",
+    "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "electron": "^40.4.0"
   }
 }
